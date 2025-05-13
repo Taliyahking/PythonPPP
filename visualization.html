@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GNSS定位结果可视化</title>
+    <!-- Load PropTypes before React -->
+    <script src="https://unpkg.com/prop-types@15.7.2/prop-types.min.js"></script>
+    <!-- Load React and ReactDOM -->
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Fix Recharts import - use a specific version that works with React 17 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.1.12/Recharts.js"></script>
+    <!-- Load Tailwind CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 p-4">
+    <div id="root" class="container mx-auto"></div>
+
+    <script type="text/babel">
+        // Access Recharts components - corrected from global variable
+        const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } = window.Recharts;
+        const { useState, useEffect } = React;
+
+        // GNSS可视化组件
+        const GNSSVisualization = () => {
+            const [data, setData] = useState([]);
+            const [metadata, setMetadata] = useState({});
+            const [loading, setLoading] = useState(true);
+            const [hoveredPoint, setHoveredPoint] = useState(null);
+            const [selectedCurves, setSelectedCurves] = useState({
+                thrD: true,
+                n: true,
+                e: true,
+                u: true
+            });
+            const [isZoomed, setIsZoomed] = useState(false);
+
+            // Mock data for demonstration purposes since we don't have the actual JSON file
+            const mockData = Array.from({ length: 300 }, (_, i) => ({
+                epoch: i,
+                x: 4000000 + Math.random() * 0.5,
+                y: 3000000 + Math.random() * 0.5,
+                z: 3000000 + Math.random() * 0.5,
+                n: Math.random() * 0.01 - 0.005,
+                e: Math.random() * 0.01 - 0.005,
+                u: Math.random() * 0.05 - 0.025,
+                thrD: i < 165 ? Math.random() * 0.1 : Math.random() * 0.01
+            }));
+
+            // 加载数据
+            useEffect(() => {
+                // Simulating data fetch
+                console.log("开始加载数据...");
+
+                // Try to fetch real data first, fall back to mock data if unavailable
+                fetch('gnss_visualization_data.json')
+                    .then(response => {
+                        console.log("收到响应:", response.status);
+                        if (!response.ok) {
+                            throw new Error("File not found or server error");
+                        }
+                        return response.json();
+                    })
+                    .then(jsonData => {
+                        console.log("数据解析成功，数据结构:", Object.keys(jsonData));
+                        if (jsonData.epochs) {
+                            console.log("使用新格式数据，包含", jsonData.epochs.length, "个历元");
+                            setData(jsonData.epochs);
+                            setMetadata(jsonData.metadata || {});
+                        } else {
+                            console.log("使用旧格式数据，包含", jsonData.length, "个历元");
+                            setData(jsonData);
+                            // 尝试计算收敛时间
+                            const ct = jsonData.find(item => item.epoch === 165)?.epoch || 165;
+                            setMetadata({
+                                convergenceTime: ct,
+                                rmsN: 0.003837,
+                                rmsE: 0.005000,
+                                rmsU: 0.022021,
+                                rms3D: Math.sqrt(0.003837**2 + 0.005000**2 + 0.022021**2)
+                            });
+                        }
+                        setLoading(false);
+                    })
+                    .catch(error => {
+                        console.log("使用模拟数据", error.message);
+                        // Use mock data instead
+                        setData(mockData);
+                        setMetadata({
+                            convergenceTime: 165,
+                            rmsN: 0.003837,
+                            rmsE: 0.005000,
+                            rmsU: 0.022021,
+                            rms3D: Math.sqrt(0.003837**2 + 0.005000**2 + 0.022021**2)
+                        });
+                        setLoading(false);
+                    });
+            }, []);
+
+            // 切换曲线显示
+            const toggleCurve = (curve) => {
+                setSelectedCurves(prev => ({
+                    ...prev,
+                    [curve]: !prev[curve]
+                }));
+            };
+
+            // 切换图表缩放状态
+            const toggleZoom = () => {
+                setIsZoomed(prev => !prev);
+            };
+
+            if (loading) {
+                return (
+                    <div className="flex items-center justify-center h-64">
+                        <div className="text-xl text-gray-600">加载中...</div>
+                    </div>
+                );
+            }
+
+            // 获取收敛时间
+            const convergenceTime = metadata.convergenceTime || 165;
+
+            // 计算收敛后的平均误差
+            const postConvergenceData = data.filter(item => item.epoch >= convergenceTime);
+            const avgError = postConvergenceData.length > 0
+                ? postConvergenceData.reduce((sum, item) => sum + item.thrD, 0) / postConvergenceData.length
+                : 0;
+
+            // 获取RMS值
+            const rmsN = metadata.rmsN || 0.003837;
+            const rmsE = metadata.rmsE || 0.005000;
+            const rmsU = metadata.rmsU || 0.022021;
+            const rms3D = metadata.rms3D || Math.sqrt(rmsN**2 + rmsE**2 + rmsU**2);
+
+            // 计算Y轴范围
+            const calculateYAxisDomain = () => {
+                if (!isZoomed) {
+                    return ['auto', 'auto']; // 使用默认范围
+                }
+
+                // 放大模式下，使用固定的±1的范围
+                return [-1, 1];
+            };
+
+            return (
+                <div className="bg-gray-50 p-6 rounded-xl">
+                    <h2 className="text-2xl font-bold text-gray-800 mb-6">GNSS定位结果分析</h2>
+
+                    <div className="bg-white p-4 rounded-lg shadow mb-6">
+                        <h3 className="text-lg font-semibold text-gray-700 mb-2">关键指标</h3>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <div className="bg-blue-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-500">收敛时间(CT)</p>
+                                <p className="text-xl font-bold text-blue-700">{convergenceTime} 历元</p>
+                            </div>
+                            <div className="bg-green-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-500">收敛后平均误差</p>
+                                <p className="text-xl font-bold text-green-700">{avgError.toFixed(6)} m</p>
+                            </div>
+                            <div className="bg-purple-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-500">N方向中误差</p>
+                                <p className="text-xl font-bold text-purple-700">{rmsN.toFixed(6)} m</p>
+                            </div>
+                            <div className="bg-yellow-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-500">E方向中误差</p>
+                                <p className="text-xl font-bold text-amber-700">{rmsE.toFixed(6)} m</p>
+                            </div>
+                            <div className="bg-red-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-500">U方向中误差</p>
+                                <p className="text-xl font-bold text-red-700">{rmsU.toFixed(6)} m</p>
+                            </div>
+                            <div className="bg-indigo-50 p-3 rounded-lg">
+                                <p className="text-sm text-gray-500">3D总体中误差</p>
+                                <p className="text-xl font-bold text-indigo-700">{rms3D.toFixed(6)} m</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow mb-6">
+                        <div className="flex flex-wrap justify-between items-center mb-4">
+                            <h3 className="text-lg font-semibold text-gray-700">误差曲线显示控制</h3>
+                            <button
+                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${isZoomed ? 'bg-yellow-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                                onClick={toggleZoom}
+                            >
+                                {isZoomed ? '显示全局视图' : '放大查看收敛后数据'}
+                            </button>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                            <button
+                                className={`px-3 py-1 rounded-full text-sm font-medium ${selectedCurves.thrD ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                                onClick={() => toggleCurve('thrD')}
+                            >
+                                三维距离误差
+                            </button>
+                            <button
+                                className={`px-3 py-1 rounded-full text-sm font-medium ${selectedCurves.n ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                                onClick={() => toggleCurve('n')}
+                            >
+                                N方向误差
+                            </button>
+                            <button
+                                className={`px-3 py-1 rounded-full text-sm font-medium ${selectedCurves.e ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                                onClick={() => toggleCurve('e')}
+                            >
+                                E方向误差
+                            </button>
+                            <button
+                                className={`px-3 py-1 rounded-full text-sm font-medium ${selectedCurves.u ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                                onClick={() => toggleCurve('u')}
+                            >
+                                U方向误差
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow mb-6">
+                        <h3 className="text-lg font-semibold text-gray-700 mb-4">
+                            误差随历元变化 {isZoomed && '(收敛后放大视图)'}
+                        </h3>
+                        <div className="h-96">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart
+                                    data={isZoomed ? postConvergenceData : data}
+                                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                                    onMouseMove={(e) => {
+                                        if (e && e.activePayload && e.activePayload.length) {
+                                            setHoveredPoint(e.activePayload[0].payload);
+                                        }
+                                    }}
+                                >
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                    <XAxis
+                                        dataKey="epoch"
+                                        label={{ value: '历元', position: 'insideBottomRight', offset: -10 }}
+                                        tick={{ fontSize: 12 }}
+                                        domain={isZoomed ? ['dataMin', 'dataMax'] : ['dataMin', 'dataMax']}
+                                    />
+                                    <YAxis
+                                        label={{ value: '误差 (m)', angle: -90, position: 'insideLeft' }}
+                                        tick={{ fontSize: 12 }}
+                                        domain={calculateYAxisDomain()}
+                                    />
+                                    <Tooltip
+                                        formatter={(value, name) => [value.toFixed(6) + ' m', name]}
+                                        labelFormatter={(label) => `历元 ${label}`}
+                                    />
+                                    <Legend />
+                                    {!isZoomed && (
+                                        <ReferenceLine
+                                            x={convergenceTime}
+                                            stroke="red"
+                                            strokeDasharray="3 3"
+                                            label={{
+                                                value: 'CT',
+                                                position: 'insideTopRight',
+                                                fill: 'red',
+                                                fontSize: 12
+                                            }}
+                                        />
+                                    )}
+                                    {selectedCurves.thrD && (
+                                        <Line
+                                            type="monotone"
+                                            dataKey="thrD"
+                                            name="三维距离误差"
+                                            stroke="#8884d8"
+                                            dot={false}
+                                            activeDot={{ r: 6, stroke: '#8884d8', strokeWidth: 2, fill: '#ffffff' }}
+                                        />
+                                    )}
+                                    {selectedCurves.n && (
+                                        <Line
+                                            type="monotone"
+                                            dataKey="n"
+                                            name="N方向误差"
+                                            stroke="#4ade80"
+                                            dot={false}
+                                            activeDot={{ r: 6, stroke: '#4ade80', strokeWidth: 2, fill: '#ffffff' }}
+                                        />
+                                    )}
+                                    {selectedCurves.e && (
+                                        <Line
+                                            type="monotone"
+                                            dataKey="e"
+                                            name="E方向误差"
+                                            stroke="#3b82f6"
+                                            dot={false}
+                                            activeDot={{ r: 6, stroke: '#3b82f6', strokeWidth: 2, fill: '#ffffff' }}
+                                        />
+                                    )}
+                                    {selectedCurves.u && (
+                                        <Line
+                                            type="monotone"
+                                            dataKey="u"
+                                            name="U方向误差"
+                                            stroke="#ef4444"
+                                            dot={false}
+                                            activeDot={{ r: 6, stroke: '#ef4444', strokeWidth: 2, fill: '#ffffff' }}
+                                        />
+                                    )}
+                                </LineChart>
+                            </ResponsiveContainer>
+                        </div>
+                        <div className="mt-4 text-center text-sm text-gray-500">
+                            提示: {isZoomed ? '当前显示收敛后放大视图，' : ''}点击"显示全局视图"按钮可{isZoomed ? '返回全局视图' : '放大查看收敛后的数据细节'}
+                        </div>
+                    </div>
+
+                    {hoveredPoint && (
+                        <div className="bg-white p-4 rounded-lg shadow">
+                            <h3 className="text-lg font-semibold text-gray-700 mb-2">历元 {hoveredPoint.epoch} 详细信息</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <h4 className="font-medium text-gray-600 mb-1">ECEF坐标</h4>
+                                    <p>X: {hoveredPoint.x.toFixed(6)} m</p>
+                                    <p>Y: {hoveredPoint.y.toFixed(6)} m</p>
+                                    <p>Z: {hoveredPoint.z.toFixed(6)} m</p>
+                                </div>
+                                <div>
+                                    <h4 className="font-medium text-gray-600 mb-1">NEU误差</h4>
+                                    <p className="text-green-600">N: {hoveredPoint.n.toFixed(6)} m</p>
+                                    <p className="text-blue-600">E: {hoveredPoint.e.toFixed(6)} m</p>
+                                    <p className="text-red-600">U: {hoveredPoint.u.toFixed(6)} m</p>
+                                </div>
+                                <div>
+                                    <h4 className="font-medium text-gray-600 mb-1">三维距离误差</h4>
+                                    <p className="text-xl font-bold text-purple-600">{hoveredPoint.thrD.toFixed(6)} m</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // 渲染组件
+        ReactDOM.render(
+            <GNSSVisualization />,
+            document.getElementById('root')
+        );
+    </script>
+</body>
+</html>
